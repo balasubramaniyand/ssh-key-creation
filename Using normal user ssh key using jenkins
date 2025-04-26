@@ -1,0 +1,5 @@
+sudo cp /home/user/.ssh/id_rsa /var/lib/jenkins/.ssh/id_rsa
+sudo cp /home/user/.ssh/id_rsa.pub /var/lib/jenkins/.ssh/id_rsa.pub
+sudo chown jenkins:jenkins /var/lib/jenkins/.ssh/id_rsa
+sudo chmod 600 /var/lib/jenkins/.ssh/id_rsa
+sudo -u jenkins ssh -T git@gitlab.com
