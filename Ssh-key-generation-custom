@@ -1,0 +1,5 @@
+ssh-keygen -t rsa -b 4096 -C "your-email@example.com" -f /home/user/db/id_rsa
+eval "$(ssh-agent -s)"
+ssh-add /home/user/db/id_rsa
+GIT_SSH_COMMAND="ssh -i /home/user/db/id_rsa" git clone git@gitlab.com:user/repo.git
+ssh -i /home/user/db/id_rsa -T git@gitlab.com
