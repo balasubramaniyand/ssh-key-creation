@@ -1,0 +1,159 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME = 'iconnect-api'
+        BUILD_NUMBER = "${env.BUILD_NUMBER}"
+    }
+
+    stages {
+        stage('Clone Repository') {
+            steps {
+                script {
+                    try {
+                        git credentialsId: 'gitlab', url: 'https://pexgit.growipx.com/in-house/iconnect-api.git', branch: 'develop'
+                        echo "Repository cloned successfully."
+                    } catch (Exception e) {
+                        error "Failed to clone repository: ${e.getMessage()}"
+                        throw e
+                    }
+                }
+            }
+        }
+
+        stage('Docker Version Check') {
+            steps {
+                script {
+                    try {
+                        sh 'docker --version'
+                        echo "Docker version checked successfully."
+                    } catch (Exception e) {
+                        error "Failed to check Docker version: ${e.getMessage()}"
+                        throw e
+                    }
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    try {
+                        sh "docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} ."
+                        echo "Docker image built successfully."
+                    } catch (Exception e) {
+                        error "Failed to build Docker image: ${e.getMessage()}"
+                        throw e
+                    }
+                }
+            }
+        }
+
+        stage('Push Docker Image - Login') {
+            steps {
+                script {
+                    try {
+                        withCredentials([usernamePassword(credentialsId: 'docker-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                            sh "docker login dpr.growatiopex.com -u \$DOCKER_USER -p \$DOCKER_PASS"
+                        }
+                        echo "Logged into Docker registry successfully."
+                    } catch (Exception e) {
+                        error "Failed to login to Docker registry: ${e.getMessage()}"
+                        throw e
+                    }
+                }
+            }
+        }
+
+        stage('Push Docker Image') {
+            steps {
+                script {
+                    try {
+                        withCredentials([usernamePassword(credentialsId: 'docker-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                            sh """
+                                docker tag ${IMAGE_NAME}:${BUILD_NUMBER} dpr.growatiopex.com/balasubramaniyan.d/${IMAGE_NAME}:${BUILD_NUMBER}
+                                docker push dpr.growatiopex.com/balasubramaniyan.d/${IMAGE_NAME}:${BUILD_NUMBER}
+                            """
+                        }
+                        echo "Docker image pushed successfully."
+                    } catch (Exception e) {
+                        error "Failed to push Docker image: ${e.getMessage()}"
+                        throw e
+                    }
+                }
+            }
+        }
+
+        stage('Git Clone') {
+            steps {
+                script {
+                    try {
+                        sh 'mkdir -p /var/lib/jenkins/workspace/jenkins/test/' // Ensures the folder exists
+                        sh 'cd /var/lib/jenkins/workspace/jenkins/test '
+                        echo "Navigated to the test directory."
+                    } catch (Exception e) {
+                        error "Failed to navigate to the test directory: ${e.getMessage()}"
+                        throw e
+                    }
+                }
+            }
+        }
+     stage('Clone ArgoCD Repository') {
+    steps {
+        script {
+            try {
+                sh 'rm -rf /var/lib/jenkins/workspace/jenkins/test' // Ensure a clean directory
+                sh 'mkdir -p /var/lib/jenkins/workspace/jenkins/test'
+                sh 'cd /var/lib/jenkins/workspace/jenkins/test'
+                git credentialsId: 'gitlab', url: 'https://pexgit.growipx.com/k8s/argocd/iconnect-qa.git', branch: 'dev'
+                echo "ArgoCD repository (branch 'dev') cloned successfully inside /var/lib/jenkins/workspace/jenkins/test."
+            } catch (Exception e) {
+                error "Failed to clone ArgoCD repository inside /var/lib/jenkins/workspace/jenkins/test: ${e.getMessage()}"
+                throw e
+            }
+        }
+    }
+}
+        stage('Update API Tag Version') {
+            steps {
+                script {
+                    try {
+                        sh "sed -i '/api:/,/tag:/s|tag: .*|tag: ${BUILD_NUMBER}|' values.yaml"
+                        sh 'cat values.yaml'
+                        echo "Updated API tag version in values.yaml."
+                    } catch (Exception e) {
+                        error "Failed to update API tag version in values.yaml: ${e.getMessage()}"
+                        throw e
+                    }
+                }
+            }
+        }
+
+stage('Commit and Push Changes') {
+    steps {
+        script {
+            withCredentials([usernamePassword(credentialsId: 'gitlab', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+                try {
+                    sh 'git config --global user.email "\$GIT_USERNAME@example.com"'
+                    sh 'git config --global user.name "\$GIT_USERNAME"'
+
+                    sh 'cd test'
+                    sh 'git add values.yaml'
+                    sh 'git commit -m "Update API tag version"'
+
+                    // Try pushing with the Git plugin's push command again
+                    git push: 'origin dev', credentialsId: 'gitlab'
+
+                    echo "Changes committed and pushed successfully."
+                } catch (Exception e) {
+                    error "Failed to commit and push changes: ${e.getMessage()}"
+                    throw e
+                }
+            }
+        }
+    }
+}
+}
+}
+}
+}
