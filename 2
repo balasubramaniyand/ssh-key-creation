@@ -1,0 +1,104 @@
+# Start from official Jenkins LTS image
+FROM jenkins/jenkins:lts
+
+USER root
+
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y \
+        apt-transport-https \
+        ca-certificates \
+        curl \
+        gnupg \
+        lsb-release \
+        sudo \
+        vim \
+        iptables \
+        procps \
+        tar \
+        wget \
+        unzip \
+        python3 \
+        python3-pip \
+        python3-venv \
+        maven \
+        jq
+
+# Install Docker
+RUN install -m 0755 -d /etc/apt/keyrings && \
+    curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc && \
+    chmod a+r /etc/apt/keyrings/docker.asc && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian \
+    $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+    tee /etc/apt/sources.list.d/docker.list > /dev/null && \
+    apt-get update && \
+    apt-get install -y \
+        docker-ce \
+        docker-ce-cli \
+        containerd.io \
+        docker-buildx-plugin \
+        docker-compose-plugin
+
+# Configure Docker
+RUN mkdir -p /etc/docker && \
+    echo '{\n  "storage-driver": "overlay2",\n  "log-driver": "json-file"\n}' > /etc/docker/daemon.json
+
+# Add Jenkins user to Docker group
+RUN usermod -aG docker jenkins
+
+# Install Java 8
+RUN wget http://www.mirbsd.org/~tg/Debs/sources.txt/wtf-bookworm.sources && \
+    mkdir -p /etc/apt/sources.list.d && \
+    mv wtf-bookworm.sources /etc/apt/sources.list.d/ && \
+    apt-get update && \
+    apt-get install -y openjdk-8-jdk
+
+# Install Java 21
+RUN wget https://download.oracle.com/java/21/latest/jdk-21_linux-x64_bin.tar.gz && \
+    mkdir -p /usr/lib/jvm && \
+    tar -xzf jdk-21_linux-x64_bin.tar.gz -C /usr/lib/jvm && \
+    rm jdk-21_linux-x64_bin.tar.gz
+
+ENV JAVA8_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+ENV JAVA21_HOME=/usr/lib/jvm/jdk-21.0.6
+ENV PATH=$JAVA21_HOME/bin:$PATH
+
+# Install Chrome and ChromeDriver
+COPY google-chrome-stable_current_amd64.deb .
+COPY chromedriver-linux64.zip .
+
+RUN apt install ./google-chrome-stable_current_amd64.deb -y && \
+    unzip ./chromedriver-linux64.zip && \
+    mv ./chromedriver-linux64/chromedriver /usr/local/bin/chromedriver && \
+    chmod +x /usr/local/bin/chromedriver && \
+    chown jenkins:jenkins /usr/local/bin/chromedriver && \
+    rm -rf chromedriver-linux64*
+
+# Install Node.js 16 and Angular CLI
+RUN curl -fsSL https://deb.nodesource.com/setup_16.x | bash - && \
+    apt-get install -y nodejs=16.20.2-1nodesource1 && \
+    npm install -g @angular/cli@8.3.29
+
+# Setup Python Virtual Environment
+RUN python3 -m venv /opt/venv && \
+    /opt/venv/bin/pip install --upgrade pip && \
+    /opt/venv/bin/pip install requests ansible
+
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Setup Docker Daemon startup
+RUN echo '#!/bin/bash\n\
+dockerd &\n\
+echo "Waiting for Docker to start..."\n\
+until docker info >/dev/null 2>&1; do\n\
+  sleep 1\n\
+done\n\
+exec su jenkins -c "/usr/local/bin/jenkins.sh"\n' > /usr/local/bin/start-jenkins-with-docker.sh && \
+    chmod +x /usr/local/bin/start-jenkins-with-docker.sh
+
+# Docker volume
+VOLUME /var/lib/docker
+
+ENTRYPOINT ["/usr/local/bin/start-jenkins-with-docker.sh"]
+
+USER jenkins
