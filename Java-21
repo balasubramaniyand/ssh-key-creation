@@ -1,0 +1,172 @@
+If you're checking the Java version inside the container and it's showing Java 17 instead of Java 21, let's modify the environment setup to ensure Java 21 is properly configured as the default Java version.
+
+Here's what might be happening:
+1. The Jenkins LTS image may come with Java 17 pre-installed
+2. Your Java 21 installation path might be incorrect
+3. The PATH environment variable might not be properly set or persisted
+
+Let me help you fix this issue:
+
+```dockerfile
+FROM jenkins/jenkins:lts
+
+USER root
+
+# Install prerequisites
+RUN apt-get update && \
+    apt-get install -y \
+    apt-transport-https \
+    ca-certificates \
+    curl \
+    gnupg \
+    lsb-release \
+    sudo \
+    vim \
+    iptables \
+    procps
+
+# Add Docker's official GPG key
+RUN install -m 0755 -d /etc/apt/keyrings && \
+    curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc && \
+    chmod a+r /etc/apt/keyrings/docker.asc
+
+# Add Docker repository to Apt sources
+RUN echo \
+    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian \
+    $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+    tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Install Docker
+RUN apt-get update && \
+    apt-get install -y \
+    docker-ce \
+    docker-ce-cli \
+    containerd.io \
+    docker-buildx-plugin \
+    docker-compose-plugin
+
+# Configure Docker daemon
+RUN mkdir -p /etc/docker && \
+    echo '{\n  "storage-driver": "overlay2",\n  "log-driver": "json-file"\n}' > /etc/docker/daemon.json
+
+# Set up Docker-in-Docker by exposing the Docker socket
+VOLUME /var/lib/docker
+
+# Add jenkins user to docker group and sudo
+RUN usermod -aG docker jenkins && \
+    echo "jenkins ALL=(ALL) NOPASSWD: /usr/bin/dockerd" >> /etc/sudoers
+
+# Install additional tools and dependencies
+RUN apt-get update && apt-get install -y wget
+RUN wget http://www.mirbsd.org/~tg/Debs/sources.txt/wtf-bookworm.sources
+RUN mkdir -p /etc/apt/sources.list.d
+RUN mv wtf-bookworm.sources /etc/apt/sources.list.d/
+RUN apt-get update && apt-get install -y openjdk-8-jdk
+
+# Install Java 21 and make it the default
+RUN apt-get update && apt-get install -y tar \
+    && wget https://download.oracle.com/java/21/latest/jdk-21_linux-x64_bin.tar.gz \
+    && mkdir -p /usr/lib/jvm \
+    && tar -xzf jdk-21_linux-x64_bin.tar.gz -C /usr/lib/jvm \
+    && rm jdk-21_linux-x64_bin.tar.gz
+
+# Find the exact Java 21 directory name
+RUN ls -la /usr/lib/jvm/
+
+# Set up Java environment variables and alternatives
+RUN export JAVA21_HOME=$(find /usr/lib/jvm -maxdepth 1 -name "jdk-21*" | head -n 1) && \
+    echo "JAVA21_HOME=$JAVA21_HOME" >> /etc/environment && \
+    echo "JAVA8_HOME=/usr/lib/jvm/java-8-openjdk-amd64" >> /etc/environment && \
+    update-alternatives --install /usr/bin/java java $JAVA21_HOME/bin/java 1 && \
+    update-alternatives --install /usr/bin/javac javac $JAVA21_HOME/bin/javac 1 && \
+    update-alternatives --set java $JAVA21_HOME/bin/java && \
+    update-alternatives --set javac $JAVA21_HOME/bin/javac
+
+# Add Java paths to system-wide profile
+RUN echo "export JAVA_HOME=$JAVA21_HOME" >> /etc/profile.d/java.sh && \
+    echo "export PATH=\$JAVA_HOME/bin:\$PATH" >> /etc/profile.d/java.sh && \
+    chmod +x /etc/profile.d/java.sh
+
+# Install build tools
+RUN apt-get update && apt-get install -y maven jq python3 python3-pip python3-venv
+
+# Install Chrome and ChromeDriver
+COPY chromedriver-linux64.zip .
+COPY google-chrome-stable_current_amd64.deb .
+RUN apt install ./google-chrome-stable_current_amd64.deb -y
+RUN unzip ./chromedriver-linux64.zip
+RUN mv ./chromedriver-linux64/chromedriver /usr/local/bin/chromedriver
+RUN chmod +x /usr/local/bin/chromedriver
+RUN chown jenkins:jenkins /usr/local/bin/chromedriver
+
+# Install Node.js and Angular CLI
+RUN curl -fsSL https://deb.nodesource.com/setup_16.x | bash - \
+    && apt-get install -y nodejs=16.20.2-1nodesource1
+RUN node -v && npm -v
+RUN npm install -g @angular/cli@8.3.29
+
+# Set up Python virtual environment and install packages
+RUN python3 -m venv /opt/venv
+RUN /opt/venv/bin/pip install requests
+RUN /opt/venv/bin/pip install ansible
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create a script to verify Java version and environment
+RUN echo '#!/bin/bash\n\
+echo "Checking Java version:"\n\
+java -version\n\
+echo ""\n\
+echo "Java Home:"\n\
+echo $JAVA_HOME\n\
+echo ""\n\
+echo "Path:"\n\
+echo $PATH\n\
+' > /usr/local/bin/check-java.sh && \
+    chmod +x /usr/local/bin/check-java.sh
+
+# Create startup script that will be executed as jenkins user
+RUN echo '#!/bin/bash\n\
+# Start Docker daemon in background using sudo\n\
+sudo dockerd &\n\
+\n\
+# Wait for Docker to start\n\
+echo "Waiting for Docker to start..."\n\
+until docker info >/dev/null 2>&1; do\n\
+  sleep 1\n\
+done\n\
+echo "Docker started successfully"\n\
+\n\
+# Source the Java environment file\n\
+source /etc/profile.d/java.sh\n\
+\n\
+# Start Jenkins\n\
+exec /usr/local/bin/jenkins.sh\n\
+' > /usr/local/bin/start-jenkins-with-docker.sh && \
+    chmod +x /usr/local/bin/start-jenkins-with-docker.sh && \
+    chown jenkins:jenkins /usr/local/bin/start-jenkins-with-docker.sh
+
+# Use the custom entrypoint script
+ENTRYPOINT ["/usr/local/bin/start-jenkins-with-docker.sh"]
+
+# Switch to jenkins user for runtime
+USER jenkins
+```
+
+Key changes to fix the Java version issue:
+
+1. Added a step to find the exact Java 21 directory name
+2. Used `update-alternatives` to properly set Java 21 as the default Java version
+3. Created a system-wide Java environment profile script
+4. Added a diagnostic script (`check-java.sh`) to verify the Java setup
+5. Modified the startup script to source the Java environment file
+
+After building and running this container, you can verify the Java version:
+
+```bash
+docker exec -it your_container_name bash
+java -version
+# Or
+/usr/local/bin/check-java.sh
+```
+
+This should show Java 21 as the default version. The changes ensure that Java 21 is properly set as the system-wide default Java version for all users, including the jenkins user.
