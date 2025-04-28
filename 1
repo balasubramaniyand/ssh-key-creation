@@ -1,0 +1,104 @@
+FROM jenkins/jenkins:lts
+
+USER root
+
+# Install prerequisites
+RUN apt-get update && \
+    apt-get install -y \
+    apt-transport-https \
+    ca-certificates \
+    curl \
+    gnupg \
+    lsb-release \
+    sudo \
+    vim \
+    iptables \
+    procps
+
+# Add Docker's official GPG key
+RUN install -m 0755 -d /etc/apt/keyrings && \
+    curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc && \
+    chmod a+r /etc/apt/keyrings/docker.asc
+
+# Add Docker repository to Apt sources
+RUN echo \
+    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian \
+    $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+    tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Install Docker
+RUN apt-get update && \
+    apt-get install -y \
+    docker-ce \
+    docker-ce-cli \
+    containerd.io \
+    docker-buildx-plugin \
+    docker-compose-plugin
+
+# Configure Docker daemon
+RUN mkdir -p /etc/docker && \
+    echo '{\n  "storage-driver": "overlay2",\n  "log-driver": "json-file"\n}' > /etc/docker/daemon.json
+
+# Set up Docker-in-Docker by exposing the Docker socket
+VOLUME /var/lib/docker
+
+# Add jenkins user to docker group
+RUN usermod -aG docker jenkins
+
+# Find the location of tini
+RUN which tini || echo "tini not found"
+
+# Create startup script - using the correct path for tini in the Jenkins image
+RUN echo '#!/bin/bash\n\
+# Start Docker daemon in background\n\
+dockerd &\n\
+\n\
+# Wait for Docker to start\n\
+echo "Waiting for Docker to start..."\n\
+until docker info >/dev/null 2>&1; do\n\
+  sleep 1\n\
+done\n\
+echo "Docker started successfully"\n\
+\n\
+# Start Jenkins (using the correct path for Jenkins init)\n\
+exec su jenkins -c "/usr/local/bin/jenkins.sh"\n\
+' > /usr/local/bin/start-jenkins-with-docker.sh && \
+    chmod +x /usr/local/bin/start-jenkins-with-docker.sh
+
+ENTRYPOINT ["/usr/local/bin/start-jenkins-with-docker.sh"]
+
+RUN apt-get update && apt-get install -y wget
+RUN wget http://www.mirbsd.org/~tg/Debs/sources.txt/wtf-bookworm.sources
+RUN mkdir -p /etc/apt/sources.list.d
+RUN mv wtf-bookworm.sources /etc/apt/sources.list.d/
+RUN apt-get update && apt-get install -y openjdk-8-jdk
+RUN apt-get update && apt-get install -y tar \
+    && wget https://download.oracle.com/java/21/latest/jdk-21_linux-x64_bin.tar.gz \
+    && mkdir -p /usr/lib/jvm \
+    && tar -xzf jdk-21_linux-x64_bin.tar.gz -C /usr/lib/jvm \
+    && rm jdk-21_linux-x64_bin.tar.gz 
+ENV JAVA21_HOME=/usr/lib/jvm/jdk-21.0.6
+ENV JAVA8_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+ENV PATH=$JAVA21_HOME/bin:$PATH
+# ENV PATH=$JAVA8_HOME/bin:$PATH
+RUN apt-get update && apt-get install -y maven jq python3 python3-pip python3-venv
+COPY chromedriver-linux64.zip .
+COPY google-chrome-stable_current_amd64.deb .
+RUN apt install ./google-chrome-stable_current_amd64.deb -y
+RUN unzip ./chromedriver-linux64.zip
+RUN mv ./chromedriver-linux64/chromedriver /usr/local/bin/chromedriver
+RUN chmod +x /usr/local/bin/chromedriver
+RUN chown jenkins:jenkins /usr/local/bin/chromedriver
+RUN export PATH=/usr/local/bin:$PATH
+RUN curl -fsSL https://deb.nodesource.com/setup_16.x | bash - \
+    && apt-get install -y nodejs=16.20.2-1nodesource1
+RUN node -v && npm -v
+RUN npm install -g @angular/cli@8.3.29
+RUN python3 -m venv /opt/venv
+RUN /opt/venv/bin/pip install requests
+RUN /opt/venv/bin/pip install ansible
+ENV PATH="/opt/venv/bin:$PATH"
+USER jenkins
+
+
+
