@@ -1,0 +1,42 @@
+pipeline {
+    agent any
+
+    environment {
+        REPO_URL = 'git@pexgit.growipx.com:in-house/iconnect-api.git'
+        HASH_FILE = '.last_commit_hash'
+        LATEST_COMMIT = ''
+        PREVIOUS_COMMIT = ''
+    }
+
+    stages {
+        stage('Check for Changes') {
+            steps {
+                script {
+                    try {
+                        LATEST_COMMIT = sh(
+                            script: "git ls-remote \"${REPO_URL}\" HEAD | awk '{print \$1}'",
+                            returnStdout: true
+                        ).trim()
+                        echo "Latest remote commit: ${LATEST_COMMIT}"
+
+                        if (fileExists(HASH_FILE)) {
+                            PREVIOUS_COMMIT = readFile(file: HASH_FILE).trim()
+                            echo "Previous commit hash: ${PREVIOUS_COMMIT}"
+
+                            if (LATEST_COMMIT == PREVIOUS_COMMIT) {
+                                echo "No new commits."
+                            } else {
+                                echo "New commit detected!"
+                            }
+                        } else {
+                            echo "First run: no previous commit hash found."
+                        }
+                        writeFile file: HASH_FILE, text: LATEST_COMMIT
+                    } catch (Exception e) {
+                        error "Error checking for changes: ${e.getMessage()}"
+                    }
+                }
+            }
+        }
+    }
+}
