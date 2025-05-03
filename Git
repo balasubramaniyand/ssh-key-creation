@@ -1,0 +1,37 @@
+#!/bin/bash
+
+REPO_URL="https://github.com/your/repo.git"
+REPO_DIR="my-cloned-repo"
+HASH_FILE=".last_commit_hash"
+
+# Get latest remote commit hash from default branch
+LATEST_COMMIT=$(git ls-remote "$REPO_URL" HEAD | awk '{print $1}')
+
+echo "Latest remote commit: $LATEST_COMMIT"
+
+# Check if previous commit hash file exists
+if [ -f "$HASH_FILE" ]; then
+    PREVIOUS_COMMIT=$(cat "$HASH_FILE")
+
+    if [ "$LATEST_COMMIT" == "$PREVIOUS_COMMIT" ]; then
+        echo "No new commits. Nothing to do."
+        exit 0
+    else
+        echo "New commit detected."
+    fi
+else
+    echo "No previous commit hash found. First-time run."
+fi
+
+# Clone or pull the repo
+if [ -d "$REPO_DIR/.git" ]; then
+    echo "Repo already exists. Pulling latest changes..."
+    cd "$REPO_DIR" && git pull && cd ..
+else
+    echo "Cloning the repository..."
+    git clone "$REPO_URL" "$REPO_DIR"
+fi
+
+# Save the latest commit hash
+echo "$LATEST_COMMIT" > "$HASH_FILE"
+echo "Stored latest commit hash: $LATEST_COMMIT"
