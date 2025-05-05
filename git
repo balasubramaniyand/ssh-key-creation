@@ -1,0 +1,168 @@
+pipeline {
+    agent any
+    //triggers {
+      //  pollSCM('* * * * *') // Poll every 5 minutes; adjust cron as needed
+//    }
+    environment {
+        IMAGE_NAME = 'iconnect-api'
+        BUILD_NUMBER = "${env.BUILD_NUMBER}"
+        REPO_URL_API = 'git@pexgit.growipx.com:in-house/iconnect-api.git'
+        REPO_URL_ARGO = 'git@pexgit.growipx.com:k8s/argocd/iconnect-qa.git'
+    }
+
+    stages {
+        stage('Checkout ArgoCD Repository') {
+            steps {
+                script {
+                    try {
+                        checkout([
+                            $class: 'GitSCM',
+                            branches: [[name: '*/dev']],
+                            userRemoteConfigs: [[url: "${REPO_URL_ARGO}", credentialsId: 'git-creds']]
+                        ])
+                        echo "ArgoCD repository checked out successfully."
+                    } catch (Exception e) {
+                        error "Failed to checkout ArgoCD repository: ${e.getMessage()}"
+                    }
+                }
+            }
+        }
+
+        stage('Clone API Repository') {
+            steps {
+                script {
+                    try {
+                        git branch: 'develop', url: REPO_URL_API, credentialsId: 'git-creds'
+                        echo "API repository cloned successfully."
+                    } catch (Exception e) {
+                        error "Failed to clone API repository: ${e.getMessage()}"
+                    }
+                }
+            }
+        }
+
+        stage('Docker Version Check') {
+            steps {
+                script {
+                    try {
+                        sh 'docker --version'
+                        echo "Docker version checked successfully."
+                    } catch (Exception e) {
+                        error "Failed to check Docker version: ${e.getMessage()}"
+                    }
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    try {
+                        sh "docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} --no-cache ."
+                        echo "Docker image built successfully."
+                    } catch (Exception e) {
+                        error "Failed to build Docker image: ${e.getMessage()}"
+                    }
+                }
+            }
+        }
+
+        stage('Docker Image - Login') {
+            steps {
+                script {
+                    try {
+                        withCredentials([usernamePassword(credentialsId: 'git-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                            sh "docker login dpr.growatiopex.com -u \"$DOCKER_USER\" -p \"$DOCKER_PASS\""
+                        }
+                        echo "Logged into Docker registry successfully."
+                    } catch (Exception e) {
+                        error "Failed to login to Docker registry: ${e.getMessage()}"
+                    }
+                }
+            }
+        }
+
+        stage('Push Docker Image') {
+            steps {
+                script {
+                    try {
+                        withCredentials([usernamePassword(credentialsId: 'git-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                            sh """
+                                docker tag ${IMAGE_NAME}:${BUILD_NUMBER} dpr.growatiopex.com/k8hub/${IMAGE_NAME}:${BUILD_NUMBER}
+                                docker push dpr.growatiopex.com/k8hub/${IMAGE_NAME}:${BUILD_NUMBER}
+                            """
+                        }
+                        echo "Docker image pushed successfully."
+                    } catch (Exception e) {
+                        error "Failed to push Docker image: ${e.getMessage()}"
+                    }
+                }
+            }
+        }
+
+        stage('Checkout ArgoCD Repository Again') {
+            steps {
+                script {
+                    try {
+                        dir('argo-repo') {
+                            git branch: 'dev', url: REPO_URL_ARGO, credentialsId: 'git-creds'
+                            echo "ArgoCD repository cloned successfully for updates."
+                        }
+                    } catch (Exception e) {
+                        error "Failed to clone ArgoCD repository: ${e.getMessage()}"
+                    }
+                }
+            }
+        }
+
+        stage('Update API Tag Version') {
+            steps {
+                script {
+                    try {
+                        dir('argo-repo') {
+                            sh "sed -i '/api:/,/tag:/s|tag: .*|tag: ${BUILD_NUMBER}|' values.yaml"
+                            sh 'cat values.yaml'
+                            echo "Updated API tag version in values.yaml."
+                        }
+                    } catch (Exception e) {
+                        error "Failed to update API tag version in values.yaml: ${e.getMessage()}"
+                    }
+                }
+            }
+        }
+
+        stage('Commit and Push Changes') {
+            steps {
+                script {
+                    try {
+                        dir('argo-repo') {
+                            sh """
+                                git config --global user.email "argo-ci@iopex.com"
+                                git config --global user.name "agro"
+                                git add -A
+                                git commit -m "Update API tag version to ${BUILD_NUMBER}" || echo "No changes to commit"
+                                git push origin dev
+                            """
+                        }
+                        echo "Changes committed and pushed successfully."
+                    } catch (Exception e) {
+                        error "Failed to commit and push changes: ${e.getMessage()}"
+                    }
+                }
+            }
+        }
+
+        stage('Clone API Repository Again') {
+            steps {
+                script {
+                    try {
+                        git branch: 'develop', url: REPO_URL_API, credentialsId: 'git-creds'
+                        echo "API repository cloned successfully again."
+                    } catch (Exception e) {
+                        error "Failed to clone API repository again: ${e.getMessage()}"
+                    }
+                }
+            }
+        }
+    }
+}
